@@ -487,7 +487,7 @@ train_coords <- coords[train_ind,]
 test_coords <- coords[-train_ind,]
 ```
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, fig.height=8, fig.width=15}
 #Plot the train and test sets
 par(mfrow=c(1,3))
 plot(MDG_shp)
