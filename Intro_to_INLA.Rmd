@@ -1,7 +1,12 @@
 ---
 title: "Introduction to INLA for geospatial modeling"
-author: "Punam Amratia and Susan Rumisha"
-date: "9/2/2019"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+author: "Punam Amratia, Susan Rumisha, Andre Pyhton and Penny Hancock"
+date: "5th September 2019"
 output: html_document
 ---
 
