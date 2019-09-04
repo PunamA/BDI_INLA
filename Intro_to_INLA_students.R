@@ -198,13 +198,13 @@ grid.arrange(levelplot(g.mean, scales=list(draw=F), xlab='', ylab='', main='mean
 ### OPTION 1: Prediction combined with fitting 
 
 #create a grid surface with coordinates for each pixel
-reference.image <- raster('covariates/5km/Access.tif')
+reference.image <- raster('covariates/Access.tif')
 in.country <- which(!is.na(getValues(reference.image)))
 reference.coordinates <- coordinates(reference.image)[in.country,]
 
 #make these into points and extract covariates for prediction grid
 pred.points <- SpatialPoints(reference.coordinates, proj4string = crs(MDG_shp))
-covs <- list.files('covariates/5km/', full.names = T) %>% stack()
+covs <- list.files('covariates/', full.names = T) %>% stack()
 pred.covs <- raster::extract(covs, pred.points, df=T)
 
 #remake the A matrix for prediction
@@ -215,8 +215,7 @@ dim(Aprediction)
 stk.pred <- inla.stack(data=list(y=NA), #the response
                        A=list(Aprediction,1),  #the A matrix
                        #these are your covariates and spatial components
-                       effects=list(c(list(intercept=1), 
-                                      inla.spde.make.index("spatial.field", spde$n.spde)),
+                       effects=list(iset,
                                     list(Elevation = pred.covs$Elevation,
                                          Access=pred.covs$Access,
                                          LST_day = pred.covs$LST_day,
@@ -260,7 +259,7 @@ writeRaster(pr.mdg.in, filename="output/PR.MDG_withinINLA.tif",
 ### OPTION 2: Prediction after fitting
 ## using results from Model1
 model = model1
-## recall:: formula<-y ~ -1 +intercept + f(spatial.field, model=spde) + Access + Elevation + EVI + LST_day
+## recall:: formula<-y ~ +1 + f(spatial.field, model=spde) + Access + Elevation + EVI + LST_day
 
 # Covariates for prediction points
 Access<- pred.covs$Access

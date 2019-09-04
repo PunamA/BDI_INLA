@@ -1,0 +1,586 @@
+---
+title: "Introduction to INLA for geospatial modeling"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+author: "Punam Amratia, Susan Rumisha, Andre Pyhton and Penny Hancock"
+date: "5th September 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+The following presentation is to accompany this tutorial:
+<https://docs.google.com/presentation/d/1KRrZjiBx_UKETtN-EyEQxMWXAOUxlaMdTzqpPSPMxPc/edit#slide=id.g33fbbb4edf_0_14>
+
+Overview 
+------
+In this workshop we will be taking through an example of how to use the SPDE model in INLA package. We will analyse parasite prevalence data from Madagascar. The topics we will cover include:
+
+*  How to create a mesh for the continuously indexed spatial effects
+*  Implementing the SPDE model in R-INLA
+*  Conducting simple model selection and best fit model
+*  Spatial prediction using INLA and outside of INLA
+*  Model validation
+
+
+For a much more thorough description of R-INLA and the details underlying the SPDE-models see: <https://www.math.ntnu.no/inla/r-inla.org/papers/jss/lindgren.pdf> For more details on the example we study here, see: <https://www.math.ntnu.no/inla/r-inla.org/tutorials/spde/spde-tutorial.pdf>
+
+### 1. Data used
+We reccomend downloading the Rproject file from <https://github.com/PunamA/BDI_training_INLA>. I would download the zip file. Unzip and click the ```BDI_training_INLA.Rproj``` file.
+
+**Malaria prevalence data**: Open-access malaria data hosted by the Malaria Atlas Project <https://map.ox.ac.uk/> accessed using the malariaAtlas R package. We are using Madagascar for this example
+
+**Covariate data**: a suite of satelitte imagery was cleaned and processed for this tutorial but is available upon request from the MAP team.
+
+For data cleaning and prep work please run the R-Script ```data_prep.R```
+```{r data, eval = FALSE, echo = FALSE}
+source('data_prep.R')
+```
+
+we reccomend looking at the script but it is not necessary to run as we provide the cleaned output for this workshop in ```input/MDG_clean.Rdata```
+```{r}
+load('input/MDG_clean.Rdata')
+```
+
+### 2. Model Description
+Let $Y_i$ be the number of positive people which can be modelled as a binomial.
+
+$$
+Y_i \sim Binomial(p(s_i), N_i)
+$$
+where $p(s_i)$ is the probability of positive for location $i$ and $N_i$ is the number of examined. Using logit link we can tranform this to a linear form:
+
+$$
+logit(p(s_i)) = \beta_0 + X(s)\beta + \psi(s_i)
+$$
+where $\beta_0$ is the intercept slope and $\beta$ is the covariate slope parameters. $psi(s_i)$ is a gaussian field that can be approximated using a gaussian random markov field and can be represented as:
+$$
+\psi(s_i)\sim N(0,\Sigma)
+$$
+where $\Sigma$ is a covariance matrix is determined by a spatial correlation function. In this case we will be using the Matern function:
+
+$$
+\frac{\sigma^2}{\Gamma(\lambda)2^{\lambda - 1}}(\kappa\parallel s_i - s_j\parallel)^\lambda K_\lambda(\kappa\parallel s_i - s_j\parallel)
+$$
+We set priors for all parameters
+$$
+\theta \sim \pi(\theta)
+$$
+
+###  3. Libraries needed and Installation
+for installation please use
+```{r}
+packages <- c("malariaAtlas", "raster", "sp", "tidyverse",
+              "lattice", "gridExtra", "devtools", "rlang")
+if(length(setdiff(packages, rownames(installed.packages()))) > 0) { 
+  install.packages(setdiff(packages, rownames(installed.packages()))) }
+
+#For INLA!!
+if(length(setdiff("INLA", rownames(installed.packages()))) > 0){
+  install.packages("INLA", repos=c(getOption("repos"), INLA="https://inla.r-inla-download.org/R/stable"), dep=TRUE)
+}
+
+```
+
+for this workshop we have included in the scripts the library packages needed. These are:
+
+```{r}
+library(INLA)
+library(malariaAtlas)
+library(raster)
+library(sp)
+library(tidyverse)
+library(lattice)     
+library(gridExtra)
+```
+
+### 4. Creating the SPDE model
+
+#### 4.1 The Mesh Construction
+Disclaimer
+there is no rule to determine the right size and spatial extension of the mesh. It is up to the analyst to set the mesh parameters, which vary from case to case. Models based on mesh with a large number of vertices are more computationally demanding and may not necessarily lead to better results than coarser mesh. Therefore we recommend to use a relatively coarse mesh during the preliminary phase of the analysis and use a finer grid only as final step, when the results of the analysis are satisfactory. To get more details on how to build a mesh, see Section 2.1. of Lindgren and Rue paper: <https://www.stat.washington.edu/peter/591/Lindgren.pdf>
+
+the mesh is a trade off between the random field and the computational cost
+from our understanding, the finer the mesh (i.e. ``mesh$n`` > number of point) then it will be
+computationally expensive; unfortunately, getting the right mesh takes a bit of trial and error
+in my opinion, have mesh$n approximately be similar or less than number of points would be better
+
+Our first step would be to create coordinates for the observation.
+In our analysis we also created the outline of the island boundary, but this isn't necessary.
+```{r}
+coords = cbind(MDG_pr_data$longitude, MDG_pr_data$latitude)
+bdry <- inla.sp2segment(MDG_shp)
+bdry$loc <- inla.mesh.map(bdry$loc)
+```
+
+Next we construct the mesh. There are mutliple arguments that mesh requires
+
+```max.edge``` is the largest allowed triangle length; the lower the number the higher the resolution
+``max.edge = c(inside the boundary triangle, outside the boundary triangle)``.
+
+``offset`` is defining how far you want to extend your domain (i.e. a secondary boundary box) for inner boundary and outer boundary; the offset goes with the max edge it should be in the same geographical unit as the max.edge
+
+*NOTE: including boundary argument makes the inner boundary value redundant. you can try with removing the boundary at this point and you'll see a different inner and outer edge. Secondly, without the boundary, the mesh will be constructed based on the convex hull surrounding the coordinates. There are alternatives if you don't want a non-convex hull.*
+
+``cutoff`` can be used to avoid building too many small triangles around clustered data locations
+
+```{r}
+mesh0 <- inla.mesh.2d(loc = coords, boundary = bdry, max.edge=c(0.5))
+mesh1 <- inla.mesh.2d(loc = coords, boundary = bdry, max.edge=c(0.5, 1))
+mesh2 <- inla.mesh.2d(loc = coords, boundary = bdry, max.edge=c(0.5, 1),
+                      offset = c(0.5,1))
+mesh3 <- inla.mesh.2d(loc = coords, boundary = bdry, max.edge=c(0.5,1), 
+                      offset = c(0.5, 1),
+                      cutoff = 0.3)
+```
+```{r, echo = FALSE, fig.height=8, fig.width=15}
+par(mfrow=c(1,4))
+plot(mesh0$loc, main="mesh0", type='n', axes=FALSE, xlab=" ", ylab = " "); plot(mesh0,add=TRUE, main=' ')
+plot(mesh1$loc, main="mesh1", type='n', axes=FALSE, xlab=" ", ylab = " "); plot(mesh1,add=TRUE, main=' ')
+plot(mesh2$loc, main="mesh2", type='n', axes=FALSE, xlab=" ", ylab = " "); plot(mesh2,add=TRUE, main=' ')
+plot(mesh3$loc, main="mesh3", type='n', axes=FALSE, xlab=" ", ylab = " "); plot(mesh3,add=TRUE, main=' ')
+```
+
+At this point, i would encourage you to try play with different values for each argument.
+
+*the non-convex hull approach:*
+We might want to use a mesh which is based on a non-convex hull to avoid adding many small triangles outside the domain of interest (more triangles = larger computation times), which can be done as follows.
+
+```{r}
+non_convex_bdry <- inla.nonconvex.hull(coords, -0.03, -0.05, resolution = c(100, 100))
+mesh4 <- inla.mesh.2d(boundary = non_convex_bdry, max.edge=c(0.5,1), 
+                      offset = c(0.5, 1),
+                      cutoff = 0.3)
+```
+```{r, echo=FALSE}
+par(mfrow=c(1,1))
+plot(mesh4, asp = 1, main = "")
+lines(bdry, col = 3)
+```
+
+As you can see; not very good...but it is sometimes worth looking into depending on your own work.
+
+#### 4.2. The SPDE and A matrix
+Spatial models can be thought of as multivariate gaussian model;
+the correlation structure is determined by a spatial covariance function (modelled as a Matern covariance function) for computational reasons, the full Gaussian field is approximated by a Gaussian Markov Random Field (GMRF). To approximte the GMRF is very computationally intense which is why the use of SPDE found in INLA becomes advantageous. There are two components that are required to map the GMRF into the SPDE form.
+
+a) the A matrix maps the Gaussian Markov Random Field (GMRF) from the mesh nodes to the n observation location you end up with a matrix on number of observations by number of nodes
+
+```{r}
+A<-inla.spde.make.A(mesh=mesh3,loc=as.matrix(coords));dim(A)
+```
+
+Next, we create the spde for spatial structure. this is a function that uses our mesh to approximate the GMRF. alpha is usually 2 as then we can determine the approximate function for the range and variance in the matern function. But you can change this; however, you run the risk of not being able to get the range and variance.
+
+```{r}
+spde <- inla.spde2.matern(mesh3, alpha=2)
+```
+
+lastly, we create all the required indexes for the SPDE model
+in here we define the "name of the effect" which will be used in the formula
+
+```{r}
+iset <- inla.spde.make.index(name = "spatial.field", spde$n.spde)
+```
+
+#### 4.3. the INLA stack
+Since the covariates already are evaluated at the observation locations, we only want to apply the A matrix to the spatial effect and not the fixed effects. It is difficult to do this manually, but we can use the inla.stack function.
+Think of it as creating a list of the inputs you input the data (i.e. your response) then the A matrix and you add a 1 for the list of covariates the effects should contain a list of the spatial effects and list of covariates
+
+
+```{r}
+stk <- inla.stack(data=list(y=MDG_pr_data$positive, n=MDG_pr_data$examined), #the response
+                  A=list(A,1),  #the A matrix; the 1 is included to make the list(covariates)
+                  #these are your covariates
+                  effects=list(iset,  #the spatial index
+                               #the covariates
+                               list(Elevation = MDG_pr_data$Elevation,
+                                    Access=MDG_pr_data$Access,
+                                    LST_day = MDG_pr_data$LST_day,
+                                    Rain = MDG_pr_data$Rain,
+                                    EVI = MDG_pr_data$EVI)
+                  ), 
+                  #this is a quick name so you can call upon easily
+                  tag='dat')
+```
+
+#### 4.4. Model Fitting
+Recall the model description (section 2). At this point to fit INLA best would be to first create the formula. This will take the classic form of $y=mx+c$ for regressions. For simplicity we will only use Elevation as a covariate in our first attempt (for a simple model selection see section 5).
+
+
+$$
+logit(p(s_i)) = \beta_0 + \beta_1Elevation + \psi()
+$$
+
+which translates to:
+
+```{r}
+formula0<-y ~ +1 + Elevation + f(spatial.field, model=spde) 
+```
+
+Note that we include +1 to include the default 'intercept'. Some people prefer to not do this so they but -1 to exclude it and modify the data stack to include an intercept value in the effects list.
+Once the formula is created we can fit the model
+
+```{r}
+model0<-inla(formula0, #the formula
+             data=inla.stack.data(stk,spde=spde),  #the data stack
+             family= 'binomial',   #which family the data comes from
+             Ntrials = n,      #this is specific to binomial as we need to tell it the number of examined
+             control.predictor=list(A=inla.stack.A(stk),compute=TRUE),  #compute gives you the marginals of the linear predictor
+             control.compute = list(dic = TRUE, waic = TRUE, config = TRUE), #model diagnostics and config = TRUE gives you the GMRF
+             verbose = FALSE) #can include verbose=TRUE to see the log of the model runs
+```
+
+#### 4.5 INLA results
+
+Once you fit the model, you will notice in your environment an inla results list (51 elements). That is a lot of elemenets, however we can extract a few summaries to look at the posterior distribution for the parameters; e.g. the fixed effects (intercept and elevation) as well as the hyper-parameters (e.g. spatial field)
+
+```{r}
+model0$summary.fix
+model0$summary.hyperpar
+
+```
+
+
+The hyperparameters $\theta_1$ is the $log(\tau)$ and $\theta_2$ is the $log(\kappa)$ from the SPDE framework.
+The SPDE model is parametrised using an internal parameterisation that might be difficult to interpret; however, we can extract the posterior distributions for the range and variance parameters through
+
+```{r}
+model0.res<-inla.spde2.result(model0, 'spatial.field', spde, do.transf=TRUE)
+model0.res$summary.log.range.nominal
+model0.res$summary.log.variance.nominal
+```
+
+the ``do.tranf = TRUE`` makes sure that marginals are calculated in the same scale as the data.
+
+### 5. Model Selection
+
+there is quite a bit of debate regarding whether we need to conduct variable selection for bayesian models; especially if the goal is prediction. However, if you look at the malaria literature, it tends to be something very prominent. So we wanted to demonstrate a rather crude/simplistic way you could be a bit of model selection using INLA. Mainly we will be following metrics that we can include using ```control.compute``` function to to attain WAIC. (Note: other criterias such as DIC or CPO/PIT for cross validation)
+
+```{r}
+###model selection with WAIC (other criteria can be used)
+for(i in 1:5){
+  
+  f1 <- as.formula(paste0("y ~ +1 + f(spatial.field, model=spde) + ", paste0(colnames(covs_df)[1:i], collapse = " + ")))
+  
+  model1<-inla(f1, data=inla.stack.data(stk,spde=spde),family= 'binomial', 
+               Ntrials = n,
+               control.predictor=list(A=inla.stack.A(stk),compute=TRUE),
+               control.compute = list(dic = TRUE, cpo=TRUE, waic = TRUE)) #verbose=TRUE,
+  
+  model_selection <- if(i==1){rbind(c(model = paste(colnames(covs_df)[1:i]),waic = model1$waic$waic))}else{rbind(model_selection,c(model = paste(colnames(covs_df)[1:i],collapse = " + "),waic = model1$waic$waic))
+  }
+
+}
+
+model_selection
+```
+
+Which model would you choose? It seems that Model 4 has the lowest WAIC so we will now fit the 'best model'
+
+```{r}
+#refit for best model:
+formula<-y ~ +1 + f(spatial.field, model=spde) + Access + Elevation + EVI + LST_day
+
+model1<-inla(formula, data=inla.stack.data(stk,spde=spde),family= 'binomial', 
+             Ntrials = n,
+             control.predictor=list(A=inla.stack.A(stk),compute=TRUE), 
+             control.compute = list(dic = TRUE, waic = TRUE, config = TRUE), 
+             verbose = FALSE) 
+
+```
+
+At this point, try explore ``model1`` using the code for *INLA Restuls*. Is there anything new or interesting?
+
+```{r, include=FALSE}
+#you can look at specifics
+model1$summary.fixed
+model1$mode$mode.status  #to check for convergence (if zero this is good)
+model1$waic$waic
+
+#Get the spatial parameters (estimated) - (convert theta1 and theta2) - to Matern parameters:
+# as in the Matern function: Theta1 = log(tau); Theta2 = log(kappa) [see relation ]
+model1$summary.hyperpar
+model1.res<-inla.spde2.result(model1, 'spatial.field', spde, do.transf=TRUE) #and then look at 
+model1.res$summary.log.range.nominal
+model1.res$summary.log.variance.nominal
+
+```
+
+something that would be nice is to perhaps look at the marginal posteriors for both fixed and hyper parameters.
+
+```{r}
+##observe the plots for fixed parameters
+par(mfrow=c(2,3))
+plot(model1$marginals.fixed[[1]], ty = "l", xlab = expression(beta[0]), ylab = "Density") 
+plot(model1$marginals.fixed[[2]], ty = "l", xlab = expression(beta[Access]), ylab = "Density") 
+plot(model1$marginals.fixed[[3]], ty = "l", xlab = expression(beta[Elevation]), ylab = "Density") 
+plot(model1$marginals.fixed[[4]], ty = "l", xlab = expression(beta[EVI]), ylab = "Density") 
+plot(model1$marginals.fixed[[5]], ty = "l", xlab = expression(beta[LST_day]), ylab = "Density") 
+```
+
+```{r}
+#observe the plots for hyper parameters
+par(mfrow=c(1,3))
+plot(model1.res$marginals.var[[1]], ty = "l", xlab = expression(sigma[randomfield]^2), ylab = "Density") 
+plot(model1.res$marginals.kap[[1]], type = "l", xlab = expression(kappa), ylab = "Density")
+plot(model1.res$marginals.range[[1]], type = "l", xlab = "range nominal", ylab = "Density")
+
+```
+
+Lastly, we could take a look at the spatial field to see if there is anything that looks wrong
+
+```{r}
+#looking at the spatial field and what it looks like
+gproj <- inla.mesh.projector(mesh3,  dims = c(300, 300))
+g.mean <- inla.mesh.project(gproj, model1$summary.random$spatial.field$mean)
+g.sd <- inla.mesh.project(gproj, model1$summary.random$spatial.field$sd)
+
+grid.arrange(levelplot(g.mean, scales=list(draw=F), xlab='', ylab='', main='mean',col.regions = heat.colors(16)),
+             levelplot(g.sd, scal=list(draw=F), xla='', yla='', main='sd' ,col.regions = heat.colors(16)), nrow=1)
+
+```
+
+
+### 6. Model Prediction
+Finally, we would like to calculate a prediction (i.e. do kriging) of the expected malaria prevalence on a dense grid in Madagascar. There are two methods we would like to show you; a) Predicting within INLA and b) Predicting outside INLA. option a) depending of how fine your prediction grid is can be very time consuming and so option b) is a lot more computationally efficient for fine-scale mapping.
+
+In order to do either, we first need to create the grid to do the prediction on.
+```{r}
+reference.image <- raster('covariates/Access.tif')
+in.country <- which(!is.na(getValues(reference.image)))
+reference.coordinates <- coordinates(reference.image)[in.country,]
+
+#make these into points and extract covariates for prediction grid
+pred.points <- SpatialPoints(reference.coordinates, proj4string = crs(MDG_shp))
+covs <- list.files('covariates/', full.names = T) %>% stack()
+pred.covs <- raster::extract(covs, pred.points, df=T)
+```
+
+we will also need to remake the observation A matrix for the prediction coordinates.
+```{r}
+#remake the A matrix for prediction
+Aprediction <- inla.spde.make.A(mesh = mesh3, loc = reference.coordinates);
+dim(Aprediction)
+```
+
+#### 6.1 Prediction within INLA
+To predict within INLA, we will need to create a inla stack for prediction. Note that for the response in the prediction stack we will set it to *y=NA*. Lastly, we join the prediction and observed data stack together.
+```{r}
+stk.pred <- inla.stack(data=list(y=NA), 
+                       A=list(Aprediction,1), 
+                       effects=list(iset,
+                                    list(Elevation = pred.covs$Elevation,
+                                         Access=pred.covs$Access,
+                                         LST_day = pred.covs$LST_day,
+                                         Rain = pred.covs$Rain,
+                                         EVI = pred.covs$EVI)
+                       ), 
+                       tag='pred')
+
+#join the prediction stack with the one for the full data
+stk.full <- inla.stack(stk, stk.pred)
+```
+
+Doing the joint estimation takes a while, and we therefore turn of the computation of certain things that we are not interested in, such as the marginals for the liear predictors using ```compute = FALSE```. We also use a simplified integration strategy (actually only using the posterior mode of the hyper-parameters) through the command control.inla = list(int.strategy = “simplified.laplace”, huge = TRUE), and defining that the dataset is huge. we need to include ```link=1``` connects the unobserved *y=NA* to the family. Just remember if you run this code, it WILL take a while (when I ran took 2814.261 seconds).
+
+```{r, eval=FALSE}
+p.res.pred<-inla(formula, data=inla.stack.data(stk.full,spde=spde),
+                 family= 'binomial', quantiles = NULL,
+                 Ntrials = n,
+                 control.predictor=list(link = 1, A=inla.stack.A(stk.full),compute=FALSE),  #compute gives you the marginals of the linear predictor
+                 control.compute = list(config = TRUE), #model diagnostics and config = TRUE gives you the GMRF
+                 control.inla(strategy = 'simplified.laplace', huge = TRUE),  #this is to make it run faster
+                 verbose = FALSE) 
+```
+
+```{r, include = FALSE}
+load('output/predictionINLA.Rdata')
+```
+
+Finally, we extract the indices to the prediction nodes and then extract the psoterior mean of the response. Remember that the output is in logit form and needs to be transformed.
+
+```{r}
+index.pred<-inla.stack.index(stk.full, "pred")$data
+post.mean.pred.logit<-p.res.pred$summary.linear.predictor[index.pred,"mean"]
+p.pred<-exp(post.mean.pred.logit)/(1 + exp(post.mean.pred.logit))
+```
+
+We can visualise the posterior mean to see what it looks like
+```{r}
+x <- as.matrix(reference.coordinates)
+z <- as.matrix(p.pred)
+pr.mdg.in<-rasterize(x, reference.image, field=z, fun='last', background=0)
+par(mfrow=c(1,1))
+plot(pr.mdg.in, main = 'Prediction using INLA')
+```
+
+
+#### 6.2 Prediction outside INLA
+A more optimised method for prediction would be to recontruct the algebra outside of INLA and use the posterior means for the parameters from the model fit.
+```{r}
+## using results from Model1
+model = model1
+## recall:: formula<-y ~ -1 +intercept + f(spatial.field, model=spde) + Access + Elevation + EVI + LST_day
+
+# Covariates for prediction points
+Access<- pred.covs$Access
+Elevation <-  pred.covs$Elevation
+EVI <- pred.covs$EVI
+LST_day <-  pred.covs$LST_day
+
+#create the spatial structure
+sfield_nodes <- model$summary.random$spatial.field['mean']
+field <- (Aprediction %*% as.data.frame(sfield_nodes)[, 1])
+
+#make empty matrix to fill predictions
+pred <- matrix(NA, nrow = dim(Aprediction)[1], ncol = 1)
+
+## Calculate Predicted values using regression formula
+pred <- model$summary.fixed['(Intercept)', 'mean'] + 
+  model$summary.fixed['Access', 'mean'] * Access +
+  model$summary.fixed['Elevation', 'mean'] * Elevation +
+  model$summary.fixed['EVI', 'mean'] * EVI +
+  model$summary.fixed['LST_day', 'mean'] * LST_day +
+  field 
+
+# write results in csv
+results <- exp(pred)/(1+exp(pred))
+```
+
+and plot this
+
+```{r}
+# write results as a raster
+x <- as.matrix(reference.coordinates)
+z <- as.matrix(results)
+pr.mdg.out <- rasterFromXYZ(cbind(x, z))
+
+plot(pr.mdg.out, main = 'Prediction outside INLA')
+```
+
+You will notive the maps look very similar which is good, as they should be doing the same thing.
+
+### 7. Model Validation
+
+Often times we may wish to run a model validation. This would require us spliting the data into Training and Testing sets. 
+Then we would run a similar model like Prediction within INLA (section 6.1). 
+
+First let's split the data and make the observations in the test set NA
+
+```{r}
+## 75% of the sample size
+smp_size <- floor(0.75 * nrow(MDG_pr_data))
+
+## set the seed to make your partition reproducible
+set.seed(123)
+train_ind <- sample(seq_len(nrow(MDG_pr_data)), size = smp_size, replace = FALSE)
+
+train <- MDG_pr_data[train_ind, ]
+test <- MDG_pr_data[-train_ind, ]
+test$positive <- NA  #make the y values for test NA
+
+#lastly, create the training and testing coordinates
+train_coords <- coords[train_ind,]
+test_coords <- coords[-train_ind,]
+```
+
+```{r, echo=FALSE, fig.height=8, fig.width=15}
+#Plot the train and test sets
+par(mfrow=c(1,3))
+plot(MDG_shp)
+points(test_coords, pch=2,  col="red", cex=1.2)
+plot(MDG_shp)
+points(train_coords, pch=16, col="blue", cex=1.2)
+plot(MDG_shp)
+points(train_coords, pch=16,  col="blue", cex=1.2)
+points(test_coords, pch=2,  col="red", cex=1.2)
+
+legend("bottomright", legend=c("Test", "Train"),
+       fill=c("red", "blue"), cex=2)
+```
+
+Next, we create the A matrix for training and testing coordinates. Note: we are useing the same mesh3 and spde that we has made in section 4.1 and 4.2 respectively
+```{r}
+Ae<-inla.spde.make.A(mesh=mesh3,loc=as.matrix(train_coords));dim(Ae)
+
+Ap <- inla.spde.make.A(mesh = mesh3, loc = test_coords);dim(Ap)
+```
+
+Build the stacks for predicition and estimates
+
+```{r}
+stk.e <- inla.stack(data=list(y=train$positive, n=train$examined), 
+                    A=list(Ae,1),  
+                    effects=list(iset,  
+                                 list(Elevation = train$Elevation,
+                                      Access=train$Access,
+                                      LST_day = train$LST_day,
+                                      Rain = train$Rain,
+                                      EVI = train$EVI)
+                    ), 
+                    tag='est')
+
+stk.p <- inla.stack(data=list(y=test$positive, n=test$examined), 
+                    A=list(Ap,1),  
+                    effects=list(iset,
+                                 list(Elevation = test$Elevation,
+                                      Access=test$Access,
+                                      LST_day = test$LST_day,
+                                      Rain = test$Rain,
+                                      EVI = test$EVI)
+                    ), 
+                    tag='pred')
+#put them together
+stk.full <- inla.stack(stk.e, stk.p)
+```
+
+Then re run the INLA fit for prediction within INLA
+
+```{r}
+p.res<-inla(formula, data=inla.stack.data(stk.full,spde=spde),family= 'binomial', 
+            Ntrials = n,
+            control.predictor=list(link = 1, A=inla.stack.A(stk.full),compute=TRUE),  #compute gives you the marginals of the linear predictor
+            control.compute = list(config = TRUE), #model diagnostics and config = TRUE gives you the GMRF
+            verbose = FALSE) #can include verbose=TRUE to see the log
+
+```
+
+Lastly, we can get the results from the INLA model and compare the prediction to the observation for the test set
+```{r}
+#getting the predictions
+index.pred <- inla.stack.index(stk.full, "pred")$data
+post.mean.logit <- p.res$summary.linear.predictor[index.pred,'mean'] #the posterior is in logit form
+pred <- exp(post.mean.logit)/(1 + exp(post.mean.logit))
+obs <- test$pr #this is the number pos/number examined
+```
+
+```{r, echo=FALSE}
+#plot to see
+plot(obs, pred, xlab = "Observed", ylab = "Predicted", col='red')
+abline(a=0, b=1)
+cor(obs, pred)  #not great :(
+
+```
+
+
+It seems that the prediction model we have fit is not very good. The correlation is very low. So as experts in INLA and Spatial Models, how would you improve this model?
+If you'd like some hints please see the paper from Su Kang: 
+
+*(Su Yun Kang, Katherine E. Battle, Harry S. Gibson, Arsène Ratsimbasoa, Milijaona Randrianarivelojosia, Stéphanie Ramboarina, Peter A. Zimmerman, Daniel J. Weiss, Ewan Cameron, Peter W. Gething & Rosalind E. Howes  (2018). Spatio-temporal mapping of Madagascar’s Malaria Indicator Survey results to assess Plasmodium falciparum endemicity trends between 2011 and 2016. BMC Medicine 16, Article number: 71)*
+
+
+Some other useful resources to get more indepth with INLA are:
+
+1.  The R-INLA webpage : http://www.r-inla.org/
+
+2.  Spatial and Spatio-temporal Bayesian Models with R-INLA: https://sites.google.com/a/r-inla.org/stbook/
+
+3.  Bayesian inference with INLA and R-INLA: https://becarioprecario.bitbucket.io/inla-gitbook/index.html
