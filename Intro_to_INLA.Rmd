@@ -1,10 +1,9 @@
 ---
-title: "Intro_to_INLA"
-author: "Punam Amratia, Susan Rumisha, Andre Python and Penny Hancock"
-date: "5 September 2019"
+title: "Introduction to INLA for geospatial modeling"
+author: "Punam Amratia and Susan Rumisha"
+date: "9/2/2019"
 output: html_document
 ---
-
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -36,7 +35,7 @@ We reccomend downloading the Rproject file from <https://github.com/PunamA/BDI_t
 **Covariate data**: a suite of satelitte imagery was cleaned and processed for this tutorial but is available upon request from the MAP team.
 
 For data cleaning and prep work please run the R-Script ```data_prep.R```
-```{r data, echo = FALSE}
+```{r data, eval = FALSE, echo = FALSE}
 source('data_prep.R')
 ```
 
@@ -350,13 +349,13 @@ Finally, we would like to calculate a prediction (i.e. do kriging) of the expect
 
 In order to do either, we first need to create the grid to do the prediction on.
 ```{r}
-reference.image <- raster('covariates/5km/Access.tif')
+reference.image <- raster('covariates/Access.tif')
 in.country <- which(!is.na(getValues(reference.image)))
 reference.coordinates <- coordinates(reference.image)[in.country,]
 
 #make these into points and extract covariates for prediction grid
 pred.points <- SpatialPoints(reference.coordinates, proj4string = crs(MDG_shp))
-covs <- list.files('covariates/5km/', full.names = T) %>% stack()
+covs <- list.files('covariates/', full.names = T) %>% stack()
 pred.covs <- raster::extract(covs, pred.points, df=T)
 ```
 

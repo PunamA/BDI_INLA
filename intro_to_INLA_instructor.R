@@ -217,13 +217,13 @@ grid.arrange(levelplot(g.mean, scales=list(draw=F), xlab='', ylab='', main='mean
 ### OPTION 1: Prediction combined with fitting 
 #NOTE: THIS PREDICTION TAKES A WHILE!!!
 #create a grid surface with coordinates for each pixel
-reference.image <- raster('covariates/5km/Access.tif')
+reference.image <- raster('covariates/Access.tif')
 in.country <- which(!is.na(getValues(reference.image)))
 reference.coordinates <- coordinates(reference.image)[in.country,]
 
 #make these into points and extract covariates for prediction grid
 pred.points <- SpatialPoints(reference.coordinates, proj4string = crs(MDG_shp))
-covs <- list.files('covariates/5km/', full.names = T) %>% stack()
+covs <- list.files('covariates/', full.names = T) %>% stack()
 pred.covs <- raster::extract(covs, pred.points, df=T)
 
 #remake the A matrix for prediction
@@ -259,7 +259,7 @@ stk.full <- inla.stack(stk, stk.pred)
 #This will still take time if you'd like to get a cup of tea :) 
 download.file(url="https://storage.googleapis.com/map-bdi-spatial-analysis-day/predictionINLA.Rdata", destfile="output/file.Rdata")
 load('output/file.Rdata')
-
+load('output/predictionINLA.Rdata')
 ## Extracting Predicted Values
 index.pred<-inla.stack.index(stk.full, "pred")$data
 post.mean.pred.logit<-p.res.pred$summary.linear.predictor[index.pred,"mean"]
