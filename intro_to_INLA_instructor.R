@@ -85,15 +85,6 @@ A<-inla.spde.make.A(mesh=mesh3,loc=as.matrix(coords));dim(A)
 
 spde <- inla.spde2.matern(mesh3, alpha=2)
 
-#QUESTION TRY PC MATERN AND SEE WHAT IT IS, WHAT GOES INSIDE THIS?
-#hint: use ?inla.spde2.pcmatern()
-spde.pc <- inla.spde2.pcmatern(mesh = mesh3, alpha = 2,
-                               prior.range = c(10,0.5), 
-                               prior.sigma = c(0.5,0.5))
-
-#Note that the range and variance parameters need to be interpreted 
-#with caution as they are not fully identifiable by the fitted model.
-
 # lastly, we create all the required indexes for the SPDE model
 # in here we define the "name of the effect" which will be used in the formula
 iset <- inla.spde.make.index(name = "spatial.field", spde$n.spde)

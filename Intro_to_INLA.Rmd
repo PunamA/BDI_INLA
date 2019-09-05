@@ -5,9 +5,12 @@ knit: (function(input_file, encoding) {
   rmarkdown::render(input_file,
  encoding=encoding,
  output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
-author: "Punam Amratia, Susan Rumisha, Andre Pyhton and Penny Hancock"
+author: "Punam Amratia, Susan Rumisha, Andre Python and Penny Hancock"
 date: "5th September 2019"
-output: html_document
+output: 
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
 ---
 
 ```{r setup, include=FALSE}
@@ -60,7 +63,7 @@ where $p(s_i)$ is the probability of positive for location $i$ and $N_i$ is the 
 $$
 logit(p(s_i)) = \beta_0 + X(s)\beta + \psi(s_i)
 $$
-where $\beta_0$ is the intercept slope and $\beta$ is the covariate slope parameters. $psi(s_i)$ is a gaussian field that can be approximated using a gaussian random markov field and can be represented as:
+where $\beta_0$ is the intercept slope and $\beta$ is the covariate slope parameters. $\psi(s_i)$ is a gaussian field that can be approximated using a gaussian random markov field and can be represented as:
 $$
 \psi(s_i)\sim N(0,\Sigma)
 $$
@@ -216,7 +219,7 @@ Recall the model description (section 2). At this point to fit INLA best would b
 
 
 $$
-logit(p(s_i)) = \beta_0 + \beta_1Elevation + \psi()
+logit(p(s_i)) = \beta_0 + \beta_1Elevation + \psi(s_i)
 $$
 
 which translates to:
@@ -240,7 +243,7 @@ model0<-inla(formula0, #the formula
 
 #### 4.5 INLA results
 
-Once you fit the model, you will notice in your environment an inla results list (51 elements). That is a lot of elemenets, however we can extract a few summaries to look at the posterior distribution for the parameters; e.g. the fixed effects (intercept and elevation) as well as the hyper-parameters (e.g. spatial field)
+Once you fit the model, you will notice in your environment an inla results list (51 elements). That is a lot of elements, however we can extract a few summaries to look at the posterior distribution for the parameters; e.g. the fixed effects (intercept and elevation) as well as the hyper-parameters (e.g. spatial field)
 
 ```{r}
 model0$summary.fix
@@ -250,7 +253,7 @@ model0$summary.hyperpar
 
 
 The hyperparameters $\theta_1$ is the $log(\tau)$ and $\theta_2$ is the $log(\kappa)$ from the SPDE framework.
-The SPDE model is parametrised using an internal parameterisation that might be difficult to interpret; however, we can extract the posterior distributions for the range and variance parameters through
+Briefly, the SPDE that represents the GMRF is $(\kappa^2 - \Delta)^{\alpha/2}(\tau  \xi(s_i)) = W(s_i)$. Where $\kappa$ is the scale parameter and $\tau$ controls the variance, and $W(s)$ is the Gaussian Process. The exact solution to this SPDE is the Matern covariance function (see section 2). Because of the way The SPDE model is parametrised using these internal parameterisation, it might be difficult to interpret very clearly; however, we can extract the posterior distributions for the range and variance parameters from the Matern through:
 
 ```{r}
 model0.res<-inla.spde2.result(model0, 'spatial.field', spde, do.transf=TRUE)
