@@ -99,7 +99,8 @@ iset <- inla.spde.make.index(name = "spatial.field", spde$n.spde)
 stk <- inla.stack(data=list(y=MDG_pr_data$positive, n=MDG_pr_data$examined), #the response
                   A=list(A,1),  #the A matrix; the 1 is included to make the list(covariates)
                   #these are your covariates
-                  effects=list(iset,  #the spatial index
+                  effects=list(c(list(Intercept=1), #the intercept
+                                 iset),  #the spatial index
                                #the covariates
                                list(Elevation = MDG_pr_data$Elevation,
                                     Access=MDG_pr_data$Access,
@@ -113,8 +114,8 @@ stk <- inla.stack(data=list(y=MDG_pr_data$positive, n=MDG_pr_data$examined), #th
 # Model Building ----------------------------------------------------------
 #this is similar to glm/glmer; create a formula with spatial field
 
-#you add +1 for the intercept/ -1 if wish to exclude 
-formula0<-y ~ +1 + Elevation + f(spatial.field, model=spde) 
+#you can add +1 for the default intercept or -1 if wish to exclude and code your own
+formula0<-y ~ -1 + Intercept + Elevation + f(spatial.field, model=spde) 
 
 #1. Fit the model (the INLA function)
 model0<-inla(formula0, data=inla.stack.data(stk,spde=spde),family= 'binomial', 
@@ -134,7 +135,7 @@ mypb <- txtProgressBar(min = 0, max = 5, initial = 0, width = 150, style = 3)
 
 for(i in 1:5){
   
-  f1 <- as.formula(paste0("y ~ +1 + f(spatial.field, model=spde) + ", paste0(colnames(covs_df)[1:i], collapse = " + ")))
+  f1 <- as.formula(paste0("y ~ -1 + Intercept + f(spatial.field, model=spde) + ", paste0(colnames(covs_df)[1:i], collapse = " + ")))
   
   model1<-inla(f1, data=inla.stack.data(stk,spde=spde),family= 'binomial', 
                Ntrials = n,
@@ -155,7 +156,7 @@ model_selection
 # Model Fit (Best Model) --------------------------------------------------
 
 #refit for best model:
-formula<-y ~ +1 + f(spatial.field, model=spde) + Access + Elevation + EVI + LST_day
+formula<-y ~ -1 + Intercept + f(spatial.field, model=spde) + Access + Elevation + EVI + LST_day
 
 model1<-inla(formula, data=inla.stack.data(stk,spde=spde),family= 'binomial', 
              Ntrials = n,
@@ -181,7 +182,7 @@ model1.res$summary.log.variance.nominal
 
 #Plot the Estimated Parameters
 ##observe the plots for fixed parameters
-par(mfrow=c(3,2))
+par(mfrow=c(2,3))
 plot(model1$marginals.fixed[[1]], ty = "l", xlab = expression(beta[0]), ylab = "Density") 
 plot(model1$marginals.fixed[[2]], ty = "l", xlab = expression(beta[Access]), ylab = "Density") 
 plot(model1$marginals.fixed[[3]], ty = "l", xlab = expression(beta[Elevation]), ylab = "Density") 
@@ -222,18 +223,18 @@ Aprediction <- inla.spde.make.A(mesh = mesh3, loc = reference.coordinates);
 dim(Aprediction)
 
 #remake the stack for prediction
-stk.pred <- inla.stack(data=list(y=NA), #the response
-                       A=list(Aprediction,1),  #the A matrix
-                       #these are your covariates and spatial components
-                       effects=list(iset,
+stk.pred <- inla.stack(data=list(y=NA), 
+                       A=list(Aprediction,1), 
+                       effects=list(c(list(Intercept=1)
+                                      ,iset),
                                     list(Elevation = pred.covs$Elevation,
                                          Access=pred.covs$Access,
                                          LST_day = pred.covs$LST_day,
                                          Rain = pred.covs$Rain,
                                          EVI = pred.covs$EVI)
                        ), 
-                       #this is a quick name so you can call upon easily
                        tag='pred')
+
 #join the prediction stack with the one for the full data
 stk.full <- inla.stack(stk, stk.pred)
 
@@ -247,10 +248,11 @@ stk.full <- inla.stack(stk, stk.pred)
 #              control.inla(strategy = 'simplified.laplace', huge = TRUE),  #this is to make it run faster
 #             verbose = FALSE) #can include verbose=TRUE to see the log
 
+
 #This will still take time if you'd like to get a cup of tea :) 
-download.file(url="https://storage.googleapis.com/map-bdi-spatial-analysis-day/predictionINLA.Rdata", destfile="output/file.Rdata")
-load('output/file.Rdata')
+download.file(url="https://storage.googleapis.com/map-bdi-spatial-analysis-day/predictionINLA.Rdata", destfile="output/predictionINLA.Rdata")
 load('output/predictionINLA.Rdata')
+
 ## Extracting Predicted Values
 index.pred<-inla.stack.index(stk.full, "pred")$data
 post.mean.pred.logit<-p.res.pred$summary.linear.predictor[index.pred,"mean"]
@@ -269,7 +271,7 @@ writeRaster(pr.mdg.in, filename="output/PR.MDG_withinINLA.tif",
 ### OPTION 2: Prediction after fitting
 ## using results from Model1
 model = model1
-## recall:: formula<-y ~ -1 +intercept + f(spatial.field, model=spde) + Access + Elevation + EVI + LST_day
+## recall:: formula<-y ~ -1 + Intercept + f(spatial.field, model=spde) + Access + Elevation + EVI + LST_day
 
 # Covariates for prediction points
 Access<- pred.covs$Access
@@ -285,7 +287,7 @@ field <- (Aprediction %*% as.data.frame(sfield_nodes)[, 1])
 pred <- matrix(NA, nrow = dim(Aprediction)[1], ncol = 1)
 
 ## Calculate Predicted values using regression formula
-pred <- model$summary.fixed['(Intercept)', 'mean'] + 
+pred <- model$summary.fixed['Intercept', 'mean'] + 
   model$summary.fixed['Access', 'mean'] * Access +
   model$summary.fixed['Elevation', 'mean'] * Elevation +
   model$summary.fixed['EVI', 'mean'] * EVI +
@@ -344,8 +346,8 @@ legend("bottomright", legend=c("Test", "Train"),
 stk.e <- inla.stack(data=list(y=train$positive, n=train$examined), #the response
                     A=list(Ae,1),  #the A matrix; the 1 is included to make the list(covariates)
                     #these are your covariates
-                    effects=list(c(list(intercept=1), #check specification of the intercept
-                                   inla.spde.make.index("spatial.field", spde$n.spde)),  #the spatial index
+                    effects=list(c(list(Intercept=1), #the intercept
+                                   iset),  #the spatial index
                                  list(Elevation = train$Elevation,
                                       Access=train$Access,
                                       LST_day = train$LST_day,
@@ -358,8 +360,8 @@ stk.e <- inla.stack(data=list(y=train$positive, n=train$examined), #the response
 stk.p <- inla.stack(data=list(y=test$positive, n=test$examined), #the response
                     A=list(Ap,1),  #the A matrix; the 1 is included to make the list(covariates)
                     #these are your covariates
-                    effects=list(c(list(intercept=1), #check specification of the intercept
-                                   inla.spde.make.index("spatial.field", spde$n.spde)),  #the spatial index
+                    effects=list(c(list(Intercept=1), #the intercept
+                                   iset),  #the spatial index
                                  list(Elevation = test$Elevation,
                                       Access=test$Access,
                                       LST_day = test$LST_day,
